@@ -1,8 +1,0 @@
-Metadata-Version: 2.4
-Name: gpt-tool-use
-Version: 0.1.0
-Summary: MCP tool for Claude Code that routes queries through ChatGPT via browser automation
-Requires-Python: >=3.10
-Requires-Dist: mcp
-Requires-Dist: playwright
-Requires-Dist: markdownify

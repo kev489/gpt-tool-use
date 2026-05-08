@@ -1,2 +1,0 @@
-[console_scripts]
-gpt-search = mcp_server:main

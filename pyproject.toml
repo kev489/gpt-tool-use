@@ -17,4 +17,4 @@ dependencies = [
 py-modules = ["mcp_server", "browser", "gpt_search"]
 
 [project.scripts]
-gpt-search = "mcp_server:main"
+gpt-tools = "mcp_server:main"

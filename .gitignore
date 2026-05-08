@@ -2,3 +2,7 @@ chatgpt_profile/
 __pycache__/
 *.pyc
 CLAUDE.md
+debug/
+*.egg-info/
+generated/
+.DS_Store

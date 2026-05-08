@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.example.gpt-tools</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/PATH/TO/python3</string>
+        <string>/PATH/TO/gpt_tool_use/mcp_server.py</string>
+        <string>--transport</string>
+        <string>http</string>
+        <string>--host</string>
+        <string>127.0.0.1</string>
+        <string>--port</string>
+        <string>8788</string>
+        <string>--headless</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/PATH/TO/gpt_tool_use</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/PATH/TO/gpt_tool_use/debug/launchd-stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/PATH/TO/gpt_tool_use/debug/launchd-stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>

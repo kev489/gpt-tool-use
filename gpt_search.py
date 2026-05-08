@@ -7,13 +7,17 @@ async def main():
     bot = ChatGPTBrowser()
     await bot.start()
     try:
-        async for chunk in bot.stream_message(query):
-            if chunk["type"] == "final":
-                print(chunk["content"])
-                if chunk["sources"]:
-                    print("\n--- Sources ---")
-                    for i, src in enumerate(chunk["sources"], 1):
-                        print(f"[{i}] {src}")
+        session = await bot.new_session()
+        try:
+            async for chunk in session.stream_message(query):
+                if chunk["type"] == "final":
+                    print(chunk["content"])
+                    if chunk["sources"]:
+                        print("\n--- Sources ---")
+                        for i, src in enumerate(chunk["sources"], 1):
+                            print(f"[{i}] {src}")
+        finally:
+            await session.close()
     finally:
         await bot.close()
 
