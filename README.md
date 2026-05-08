@@ -22,14 +22,14 @@ The tradeoff with both is speed. Browser automation is slower than a direct API 
 ## Setup
 
 ```bash
-pip install git+https://github.com/kevin-chafloque/gpt-tool-use.git
+pip install git+https://github.com/kev489/gpt-tool-use.git
 playwright install chromium
 ```
 
 Or clone and install locally:
 
 ```bash
-git clone https://github.com/kevin-chafloque/gpt-tool-use.git
+git clone https://github.com/kev489/gpt-tool-use.git
 cd gpt-tool-use
 pip install .
 playwright install chromium
