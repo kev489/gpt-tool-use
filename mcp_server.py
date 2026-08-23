@@ -12,7 +12,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import TextContent, ImageContent
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from browser import ChatGPTBrowser, USER_DATA_DIR
+from browser import ChatGPTBrowser, ChatGPTResponseError, USER_DATA_DIR
 
 try:
     from json_repair import repair_json
@@ -424,16 +424,24 @@ async def _new_session_with_retry():
 
 
 async def _run_search_in_session(query: str, raw_output: bool = False) -> str:
-    async with _get_tab_semaphore():
-        session = await _new_session_with_retry()
-        try:
-            result = ""
-            async for chunk in session.stream_message(query, raw_output=raw_output):
-                if chunk["type"] == "final":
-                    result = chunk["content"]
-            return result
-        finally:
-            await session.close()
+    # ChatGPT intermittently answers with its own "Something went wrong" error. That chat
+    # tab usually stays broken, so recover by retrying the query in a brand-new session
+    # rather than re-sending into the same one. Persistent failures still raise.
+    last_error = None
+    for _ in range(2):
+        async with _get_tab_semaphore():
+            session = await _new_session_with_retry()
+            try:
+                result = ""
+                async for chunk in session.stream_message(query, raw_output=raw_output):
+                    if chunk["type"] == "final":
+                        result = chunk["content"]
+                return result
+            except ChatGPTResponseError as e:
+                last_error = e
+            finally:
+                await session.close()
+    raise ChatGPTResponseError(f"ChatGPT returned an error response twice in fresh sessions: {last_error}")
 
 
 async def _run_image_in_session(prompt: str) -> dict:

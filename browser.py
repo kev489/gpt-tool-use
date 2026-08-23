@@ -12,6 +12,14 @@ PROMPT_SELECTORS = [
     'div[contenteditable="true"]',
     'textarea[placeholder*="Ask"]',
 ]
+SEND_BUTTON_SELECTORS = [
+    '[data-testid="send-button"]',
+    "#composer-submit-button",
+    'button[aria-label*="Send prompt" i]',
+    'button[aria-label*="Send message" i]',
+    'button[aria-label*="Send" i]',
+    'form button[type="submit"]',
+]
 RATE_LIMIT_TITLE = "too many requests"
 RATE_LIMIT_SNIPPETS = [
     "making requests too quickly",
@@ -19,15 +27,64 @@ RATE_LIMIT_SNIPPETS = [
     "please wait a few minutes before trying again",
 ]
 RATE_LIMIT_REQUIRED_SNIPPETS = 2
+# Full error strings ChatGPT renders *as the assistant message*. Matched against the whole
+# trimmed response, never as a substring: a legitimate answer can discuss these verbatim.
+CHATGPT_ERROR_RESPONSES = [
+    "something went wrong. if this issue persists please contact us through our help center at help.openai.com",
+    "something went wrong while generating the response. if this issue persists please contact us through our help center at help.openai.com",
+    "there was an error generating a response",
+    "an error occurred while processing your request",
+    "our systems have detected unusual activity",
+    "the message you submitted was too long",
+]
+CHATGPT_ERROR_MAX_CHARS = 400
 
 
 class ChatGPTRateLimitError(RuntimeError):
     pass
 
 
+class ChatGPTResponseError(RuntimeError):
+    """ChatGPT answered with one of its own error messages instead of a real response."""
+    pass
+
+
 def _debug_path(name: str) -> str:
     os.makedirs(DEBUG_DIR, exist_ok=True)
     return os.path.join(DEBUG_DIR, name)
+
+
+def _detect_chatgpt_error(text: str) -> str | None:
+    """Return the error text if the response *is* a ChatGPT error, else None.
+
+    Requires the whole normalized message to EQUAL a known error string. Prefix matching
+    was tried and is wrong: an answer that legitimately quotes an error on its first line
+    ("There was an error generating a response. Users see it when...") matched and turned
+    a valid response into a hard failure. A real error message has nothing after it; a
+    real answer keeps going. Errs toward returning text rather than killing valid calls,
+    so a reworded error may pass through — that is the safe direction.
+    """
+    normalized = " ".join((text or "").split())
+    if not normalized or len(normalized) > CHATGPT_ERROR_MAX_CHARS:
+        return None
+
+    candidate = normalized.lower()
+    # inner_text picks up the Retry/Regenerate affordance rendered beside the error
+    while True:
+        stripped = candidate.rstrip(" .!?")
+        for token in ("retry", "regenerate", "try again"):
+            if stripped.endswith(token):
+                stripped = stripped[: -len(token)].rstrip(" .!?")
+                break
+        else:
+            candidate = stripped
+            break
+        candidate = stripped
+
+    for phrase in CHATGPT_ERROR_RESPONSES:
+        if candidate == phrase.rstrip(" ."):
+            return normalized
+    return None
 
 
 async def _get_rate_limit_message(page) -> str | None:
@@ -118,6 +175,60 @@ async def _find_prompt_locator(page, timeout_ms: int = 30000):
     raise TimeoutError(f"Failed to find visible ChatGPT prompt input using selectors: {', '.join(PROMPT_SELECTORS)}")
 
 
+async def _composer_text(page) -> str:
+    for selector in PROMPT_SELECTORS:
+        locator = page.locator(selector).first
+        try:
+            if await locator.count() and await locator.is_visible():
+                text = await locator.evaluate("el => el.value ?? el.innerText ?? ''")
+                return (text or "").strip()
+        except Exception:
+            continue
+    return ""
+
+
+async def _wait_for_composer_clear(page, timeout_ms: int = 4000) -> bool:
+    waited = 0
+    while waited < timeout_ms:
+        if not await _composer_text(page):
+            return True
+        await page.wait_for_timeout(250)
+        waited += 250
+    return not await _composer_text(page)
+
+
+async def _click_send_button(page) -> bool:
+    for selector in SEND_BUTTON_SELECTORS:
+        locator = page.locator(selector).first
+        try:
+            if not await locator.count() or not await locator.is_visible():
+                continue
+            if await locator.is_disabled():
+                continue
+            await locator.click(timeout=5000)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+async def _submit_prompt(page, prompt) -> bool:
+    """Submit the composer. Returns True only once the text has actually left it.
+
+    Enter alone is not reliable: chatgpt.com's composer has shipped states where Enter
+    inserts a newline instead of submitting, which silently strands the prompt and shows
+    up 30s later as a stream timeout. Click the real submit button first, and in both
+    paths confirm the composer emptied rather than assuming the keystroke landed.
+    """
+    if await _click_send_button(page) and await _wait_for_composer_clear(page):
+        return True
+    try:
+        await prompt.press("Enter", timeout=5000)
+    except Exception:
+        return False
+    return await _wait_for_composer_clear(page)
+
+
 class ChatGPTBrowser:
     def __init__(self, headless=False):
         self.headless = headless
@@ -197,13 +308,22 @@ class ChatGPTSession:
             prompt = await _find_prompt_locator(self.page, timeout_ms=30000)
             try:
                 await prompt.fill(message, timeout=5000)
-                await prompt.press("Enter", timeout=5000)
             except Exception as e:
                 last_error = e
                 continue
+            if not await _submit_prompt(self.page, prompt):
+                shot_path = _debug_path("debug_submit_failed.png")
+                try:
+                    await self.page.screenshot(path=shot_path)
+                except Exception:
+                    pass
+                last_error = Exception(
+                    f"prompt text stayed in the composer after clicking send and pressing Enter. Screenshot: {shot_path}"
+                )
+                continue
             await self.page.wait_for_timeout(250)
             return await _dismiss_rate_limit_if_present(self.page, "debug_rate_limit_send.png")
-        raise Exception(f"Failed to fill the ChatGPT prompt input after 3 attempts (input kept going stale): {last_error}")
+        raise Exception(f"Failed to send the ChatGPT prompt after 3 attempts: {last_error}")
 
     async def stream_message(self, message: str, raw_output: bool = False, timeout_ms: int = 480000):
         elements_before = await self.page.query_selector_all('div[data-message-author-role="assistant"]')
@@ -277,6 +397,10 @@ class ChatGPTSession:
             raise Exception("Could not locate the response in the DOM.")
 
         last_response = elements[-1]
+
+        chatgpt_error = _detect_chatgpt_error(await last_response.inner_text())
+        if chatgpt_error:
+            raise ChatGPTResponseError(chatgpt_error)
 
         if raw_output:
             raw_payload = await last_response.evaluate('''
