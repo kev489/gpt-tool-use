@@ -35,26 +35,31 @@ MCP server that drives ChatGPT via Playwright browser automation. Exposes `gpt_s
 - **Transport modes.** `mcp_server.py` accepts `--transport stdio` (default, one server per Claude Code session) or `--transport http` (long-lived server, multiple Claude Code sessions share it as clients). HTTP mode is the only way to run image gen concurrently across multiple Claude Code sessions, because the persistent Chromium profile only allows one accessing process at a time. With stdio, two sessions = two server processes = profile lock conflict. With HTTP, one server process owns the profile; all sessions go through it. Defaults: host `127.0.0.1`, port `8788`, path `/mcp` (FastMCP's `streamable_http_path`). See `launchd.plist.template` for auto-start.
 - **Settings via `mcp.settings`.** FastMCP host/port aren't `run()` args; they're set on `mcp.settings` before calling `run(transport="streamable-http")`.
 
-## Setup on a new machine
+## Live service wiring (this machine)
 
-Clone somewhere launchd can reach — **not** Desktop/Documents/Downloads (TCC; see Key details).
+The server runs as the launchd HTTP service `com.kchafloque.gpt-tools` — HTTP on
+`127.0.0.1:8788/mcp`, headed (see the `--headless` warning above).
 
-```
-git clone <repo>
-cd gpt-tool-use
-pip install -r requirements.txt
-playwright install chromium
-python login.py      # first run: log into ChatGPT in the browser window
-```
+- **Live plist: `~/Library/LaunchAgents/com.kchafloque.gpt-tools.plist`.** Edit it there —
+  `launchd.plist.template` in-repo is the template, not the live file — then reload:
+  `launchctl bootout gui/$UID/com.kchafloque.gpt-tools && launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.kchafloque.gpt-tools.plist`
+- Clients connect over HTTP: `~/.claude.json` registers `gpt-tools` as
+  `{"type": "http", "url": "http://127.0.0.1:8788/mcp"}`; both Codex homes
+  (`~/.codex/config.toml`, `~/.codex-app-alt/config.toml` under `[mcp_servers.gpt-tools]`)
+  point at the same URL.
+- **Never add a stdio registration while the service is running** — two server processes
+  fight over the persistent Chromium profile (see Transport modes).
+- Health check: `launchctl list | grep gpt-tools` — a PID in column 1 means running, `-`
+  means dead; column 2 is the *last* exit status (historical, e.g. `-15` after a restart —
+  it says nothing about current health). A running service can still fail on ChatGPT rate
+  limits or send timeouts; the tell is screenshots in `debug/`.
+- This repo also owns the agent-facing usage skill `skills/gpt-tools/SKILL.md` (query
+  length calibration, batch-vs-shared-context rules), symlinked into
+  `~/.claude/skills/gpt-tools`, `~/.codex/skills/gpt-tools`, and
+  `~/.codex-app-alt/skills/gpt-tools` — edit here, all three follow.
 
-Then add to Claude Code MCP settings (`~/.claude.json` under `mcpServers`, or via `claude mcp add`):
-```json
-{
-  "mcpServers": {
-    "gpt-tools": {
-      "command": "python",
-      "args": ["/path/to/gpt_tool_use/mcp_server.py"]
-    }
-  }
-}
-```
+Standing the server up elsewhere (only for a machine that won't run the shared service):
+clone outside Desktop/Documents/Downloads (TCC; see Key details), `pip install -r
+requirements.txt`, `playwright install chromium`, `python login.py`, then install the
+launchd service from the template — or, stdio fallback, register
+`{"command": "python", "args": [".../mcp_server.py"]}` in the client instead.
