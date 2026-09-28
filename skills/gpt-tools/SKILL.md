@@ -6,7 +6,7 @@ description: How to call the gpt-tools MCP server well — query and length cons
 # Using gpt_search / gpt_image_gen
 
 Server internals, launchd wiring, and failure modes live in
-`~/Customization/gpt_tool_use/CLAUDE.md` — this file is call-time usage only.
+`~/Customization/gpt_tool_use/AGENTS.md` — this file is call-time usage only.
 
 ## gpt_search
 
