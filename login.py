@@ -14,10 +14,10 @@ async def login():
     page = browser.pages[0] if browser.pages else await browser.new_page()
     await page.goto("https://chatgpt.com")
     print(f"Profile dir: {USER_DATA_DIR}")
-    print("Sign in to ChatGPT in the browser window.")
-    print("The browser will stay open for 120 seconds — close it when you're done.")
+    print("Sign in to ChatGPT (or Claude) in the browser window.")
+    print("The browser will stay open for 300 seconds — close it when you're done.")
     try:
-        await page.wait_for_event("close", timeout=120000)
+        await page.wait_for_event("close", timeout=300000)
     except Exception:
         pass
     await browser.close()

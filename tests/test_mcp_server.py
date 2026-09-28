@@ -1,6 +1,8 @@
+import asyncio
 import json
 
 import pytest
+import mcp_server
 
 from mcp_server import (
     _clean_json_result,
@@ -9,6 +11,7 @@ from mcp_server import (
     _read_search_prompt,
     _strip_invalid_json_string_escapes,
     _strip_trailing_json_commas,
+    provider_prompt_batch,
 )
 
 
@@ -80,3 +83,62 @@ def test_read_search_prompt_query_and_file(tmp_path):
     prompt_path.write_text("file prompt", encoding="utf-8")
     assert _read_search_prompt(None, str(prompt_path)) == "file prompt"
     assert _read_search_prompt("direct", None) == "direct"
+
+
+def test_provider_prompt_batch_writes_raw_provider_outputs(monkeypatch, tmp_path):
+    output_path = tmp_path / "response.raw.txt"
+    captured = {}
+
+    async def fake_run(query, **kwargs):
+        captured["query"] = query
+        captured.update(kwargs)
+        return 'json\n{"ok": true}'
+
+    monkeypatch.setattr(mcp_server, "_run_search_in_session", fake_run)
+
+    result = asyncio.run(provider_prompt_batch(
+        requests=[{
+            "label": "script_0",
+            "query": "write json",
+            "output_file": str(output_path),
+        }],
+        provider="claude",
+        max_parallel=1,
+    ))
+
+    payload = json.loads(result)
+    assert payload["results"] == [{
+        "label": "script_0",
+        "ok": True,
+        "output_file": str(output_path),
+    }]
+    assert output_path.read_text(encoding="utf-8") == 'json\n{"ok": true}'
+    assert captured["provider"] == "claude"
+    assert captured["raw_output"] is True
+
+
+def test_provider_prompt_batch_isolates_failures(monkeypatch, tmp_path):
+    async def fake_run(query, **kwargs):
+        if query == "fail":
+            raise RuntimeError("rate limit persisted")
+        return "ok"
+
+    monkeypatch.setattr(mcp_server, "_run_search_in_session", fake_run)
+
+    result = asyncio.run(provider_prompt_batch(
+        requests=[
+            {"label": "bad", "query": "fail", "output_file": str(tmp_path / "bad.txt")},
+            {"label": "good", "query": "pass", "output_file": str(tmp_path / "good.txt")},
+        ],
+        provider="chatgpt",
+        temporary_chat=True,
+        max_parallel=2,
+    ))
+
+    payload = json.loads(result)
+    assert payload["results"][0] == {
+        "label": "bad",
+        "ok": False,
+        "error": "rate limit persisted",
+    }
+    assert payload["results"][1]["ok"] is True

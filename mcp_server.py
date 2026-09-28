@@ -414,26 +414,42 @@ def _save_search_result(result: str, output_file: str | None) -> Path | None:
     return saved_path
 
 
-async def _new_session_with_retry():
+async def _new_session_with_retry(
+    provider: str = "chatgpt",
+    temporary_chat: bool = False,
+):
     bot = await _get_browser()
     try:
-        return await bot.new_session()
+        return await bot.new_session(provider=provider, temporary_chat=temporary_chat)
     except RuntimeError:
         bot = await _get_browser()
-        return await bot.new_session()
+        return await bot.new_session(provider=provider, temporary_chat=temporary_chat)
 
 
-async def _run_search_in_session(query: str, raw_output: bool = False) -> str:
+async def _run_search_in_session(
+    query: str,
+    raw_output: bool = False,
+    provider: str = "chatgpt",
+    temporary_chat: bool = False,
+    timeout_ms: int = 480000,
+) -> str:
     # ChatGPT intermittently answers with its own "Something went wrong" error. That chat
     # tab usually stays broken, so recover by retrying the query in a brand-new session
     # rather than re-sending into the same one. Persistent failures still raise.
     last_error = None
     for _ in range(2):
         async with _get_tab_semaphore():
-            session = await _new_session_with_retry()
+            session = await _new_session_with_retry(
+                provider=provider,
+                temporary_chat=temporary_chat,
+            )
             try:
                 result = ""
-                async for chunk in session.stream_message(query, raw_output=raw_output):
+                async for chunk in session.stream_message(
+                    query,
+                    raw_output=raw_output,
+                    timeout_ms=timeout_ms,
+                ):
                     if chunk["type"] == "final":
                         result = chunk["content"]
                 return result
@@ -441,16 +457,21 @@ async def _run_search_in_session(query: str, raw_output: bool = False) -> str:
                 last_error = e
             finally:
                 await session.close()
-    raise ChatGPTResponseError(f"ChatGPT returned an error response twice in fresh sessions: {last_error}")
+    raise ChatGPTResponseError(f"{provider.title()} returned an error response twice in fresh sessions: {last_error}")
 
 
 async def _run_image_in_session(prompt: str) -> dict:
     async with _get_tab_semaphore():
-        session = await _new_session_with_retry()
+        session = await _new_session_with_retry(provider="chatgpt")
+        bot = await _get_browser()
+        bot.reveal_for_rendering()
         try:
             return await session.stream_image_message(prompt)
         finally:
-            await session.close()
+            try:
+                await session.close()
+            finally:
+                bot.hide_after_rendering()
 
 
 @mcp.tool()
@@ -555,6 +576,68 @@ async def gpt_search_batch(
         else:
             output.append(item)
     return "\n\n".join(output)
+
+
+@mcp.tool()
+async def provider_prompt_batch(
+    requests: list[dict],
+    provider: str = "chatgpt",
+    temporary_chat: bool = False,
+    max_parallel: int = 2,
+    timeout_ms: int = 480000,
+    post_save_pause_seconds: float = 0.0,
+) -> str:
+    """Run raw structured-output prompts through the shared browser service.
+
+    This is the local batch-runner integration used by Inloopd. Each request must
+    include `query` or `prompt_file`, plus an `output_file` where the exact provider
+    response is written. ChatGPT and Claude share this service's browser process,
+    concurrency controls, background behavior, and rate-limit dialog dismissal.
+    """
+    if provider not in {"chatgpt", "claude"}:
+        raise ValueError("provider must be 'chatgpt' or 'claude'")
+    if temporary_chat and provider != "chatgpt":
+        raise ValueError("temporary_chat is only supported for ChatGPT")
+    if not requests:
+        return json.dumps({"provider": provider, "results": []})
+
+    call_semaphore = asyncio.Semaphore(max(1, min(max_parallel, MAX_CONCURRENT_CHATGPT_TABS)))
+
+    async def _one(index: int, req: dict) -> dict:
+        label = req.get("label") or req.get("output_file") or req.get("prompt_file") or f"request_{index + 1}"
+        output_file = req.get("output_file")
+        if not output_file:
+            raise ValueError(f"{label}: output_file is required")
+        query = _read_search_prompt(req.get("query"), req.get("prompt_file"))
+        async with call_semaphore:
+            result = await _run_search_in_session(
+                query,
+                raw_output=True,
+                provider=provider,
+                temporary_chat=temporary_chat,
+                timeout_ms=timeout_ms,
+            )
+            saved_path = _save_search_result(result, output_file)
+            if post_save_pause_seconds > 0:
+                await asyncio.sleep(post_save_pause_seconds)
+        return {
+            "label": str(label),
+            "ok": True,
+            "output_file": str(saved_path),
+        }
+
+    packed = await asyncio.gather(
+        *[_one(i, req) for i, req in enumerate(requests)],
+        return_exceptions=True,
+    )
+    results: list[dict] = []
+    for i, item in enumerate(packed):
+        label = requests[i].get("label") or requests[i].get("output_file") or requests[i].get("prompt_file") or f"request_{i + 1}"
+        if isinstance(item, Exception):
+            results.append({"label": str(label), "ok": False, "error": str(item)})
+        else:
+            results.append(item)
+    return json.dumps({"provider": provider, "results": results}, ensure_ascii=False)
 
 
 @mcp.tool()

@@ -1,6 +1,6 @@
 ---
 name: gpt-tools
-description: How to call the gpt-tools MCP server well — query and length constraints for gpt_search, batch vs shared-context choices for gpt_image_gen, save locations and filenames. Load before crafting a gpt_search research query, running multiple searches or image generations, or any gpt_image_gen call.
+description: Use the gpt-tools MCP server's gpt_search, gpt_search_batch, gpt_image_gen, and gpt_image_gen_batch tools with appropriate prompt lengths, batching, and output paths. Load before calling those tools. Does not apply to Codex's native web search or image generation tools.
 ---
 
 # Using gpt_search / gpt_image_gen
@@ -22,6 +22,10 @@ Server internals, launchd wiring, and failure modes live in
   independent queries use `gpt_search_batch` (fans out concurrently, per-item `label`
   names each heading); fold related questions into one `gpt_search` prompt when they share
   context.
+
+`provider_prompt_batch` is the raw-output integration for local pipeline clients. Do not
+use it as a substitute for `gpt_search`; Inloopd's batch runner owns its output files,
+provider choice, JSON parsing, and schema validation.
 
 ## gpt_image_gen
 
